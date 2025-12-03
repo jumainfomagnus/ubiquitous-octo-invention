@@ -1,418 +1,772 @@
-# Lab 2: Concurrency Control
+# Lab 3: Job Dependencies
 
 **Trainer:** GitHub Actions Intermediate Training for Wells Fargo  
 **Duration:** 45-60 minutes  
-**Prerequisites:** Understanding of GitHub Actions workflow triggers
+**Prerequisites:** Understanding of GitHub Actions jobs and workflows
 
 ---
 
-## Overview
+## Learning Objectives
 
-This lab demonstrates how to prevent overlapping workflow runs using concurrency controls. You'll observe the problem of simultaneous deployments, then incrementally add concurrency groups and cancellation strategies to manage workflow execution efficiently.
-
-No local setup required—you'll create workflows directly in GitHub and trigger them multiple times to see how concurrency changes behavior.
-
----
-
-## Step-by-Step
-
-### Create your repository
-
-1. Use an existing GitHub repository or create a new one.
-
-2. Make sure you're working on the **main** branch.
+By the end of this lab, you will be able to:
+- Chain jobs using the `needs` keyword
+- Build multi-stage CI/CD pipelines
+- Pass data between jobs using outputs
+- Handle job failures and conditional dependencies
+- Design complex job dependency graphs
 
 ---
 
-## Exercise 1: Observe the Problem (10 minutes)
+## Exercise 1: Basic Job Chaining (10 minutes)
 
-### See what happens without concurrency control
+### Scenario
+You need to create a basic CI/CD pipeline: Build → Test → Deploy. Each stage should only run if the previous stage succeeds.
 
-1. In GitHub, navigate to **Code** tab → **Add file** → **Create new file**.
+### Task
+Create a workflow with three dependent jobs.
 
-2. Name it `.github/workflows/concurrency.yml`.
+### Steps
 
-3. Paste this initial workflow:
+1. Create `.github/workflows/basic-dependencies.yml`
 
 ```yaml
-name: Concurrency Demo
+name: Basic Job Dependencies
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Simulate deployment
+      - uses: actions/checkout@v4
+      
+      - name: Build application
         run: |
-          echo "Starting deployment at $(date)"
-          echo "Run ID: ${{ github.run_id }}"
-          sleep 30
-          echo "Deployment complete at $(date)"
+          echo "Building application..."
+          mkdir -p build
+          echo "Build artifact" > build/app.txt
+          sleep 5
+          echo "Build complete!"
+      
+      - name: Show build info
+        run: echo "Build job completed at $(date)"
+  
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Run tests
+        run: |
+          echo "Running tests..."
+          sleep 5
+          echo "All tests passed!"
+      
+      - name: Show test info
+        run: echo "Test job completed at $(date)"
+  
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy application
+        run: |
+          echo "Deploying application..."
+          sleep 5
+          echo "Deployment complete!"
+      
+      - name: Show deploy info
+        run: echo "Deploy job completed at $(date)"
 ```
 
-4. Commit the file.
+2. Push to trigger the workflow
 
-5. Go to **Actions** → **Concurrency Demo** → **Run workflow** (click it 3 times quickly to queue 3 runs).
+3. Observe the job execution order in the Actions UI
 
-6. **Watch**: All 3 workflows run simultaneously, potentially causing deployment conflicts.
+### Questions to Answer
+1. What happens if the build job fails?
+2. Can test and deploy jobs run in parallel with this configuration?
+3. How does GitHub Actions visualize job dependencies?
 
-### What just happened?
-
-Without concurrency control, GitHub Actions runs every triggered workflow immediately (subject to runner availability). For deployments, this means:
-- Multiple deployments overwrite each other
-- Resource conflicts in production
-- Unpredictable final state
-
-This is the problem we'll solve.
+### Expected Outcome
+- Jobs run sequentially: build → test → deploy
+- Each job waits for its dependency to complete successfully
 
 ---
 
-## Exercise 2: Add Basic Concurrency Group (10 minutes)
+## Exercise 2: Multiple Dependencies (15 minutes)
 
-### Queue runs instead of running simultaneously
+### Scenario
+Your application needs both frontend and backend to be built and tested before deployment.
 
-1. Edit `.github/workflows/concurrency.yml`.
+### Task
+Create a workflow where the deploy job depends on multiple jobs completing successfully.
 
-2. Add a `concurrency:` section at the workflow level (right after the `on:` section):
+### Steps
+
+1. Create `.github/workflows/multiple-dependencies.yml`
 
 ```yaml
-name: Concurrency Demo
+name: Multiple Dependencies
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  deploy:
+  build-frontend:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Simulate deployment
+      - uses: actions/checkout@v4
+      
+      - name: Build frontend
         run: |
-          echo "Starting deployment at $(date)"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Concurrency group: ${{ github.workflow }}-${{ github.ref }}"
-          sleep 30
-          echo "Deployment complete at $(date)"
+          echo "Building frontend..."
+          sleep 10
+          echo "Frontend build complete!"
+  
+  build-backend:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build backend
+        run: |
+          echo "Building backend..."
+          sleep 10
+          echo "Backend build complete!"
+  
+  test-frontend:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Test frontend
+        run: |
+          echo "Testing frontend..."
+          sleep 8
+          echo "Frontend tests passed!"
+  
+  test-backend:
+    needs: build-backend
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Test backend
+        run: |
+          echo "Testing backend..."
+          sleep 8
+          echo "Backend tests passed!"
+  
+  deploy:
+    needs: [test-frontend, test-backend]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy application
+        run: |
+          echo "Deploying full application..."
+          echo "Frontend and backend both ready"
+          sleep 5
+          echo "Deployment successful!"
 ```
 
-3. Commit the changes.
+### Questions to Answer
+1. Which jobs can run in parallel?
+2. What happens if only the frontend tests fail?
+3. How long does the entire workflow take to complete?
 
-4. Go to **Actions** → **Concurrency Demo** → run the workflow 3 times quickly again.
-
-5. **Watch**: Runs now queue up—only one runs at a time, the others wait.
-
-### What just happened?
-
-The `concurrency` key creates a "group" that identifies related workflow runs:
-- `group: ${{ github.workflow }}-${{ github.ref }}` creates a unique ID like "Concurrency Demo-refs/heads/main"
-- Only one run per group executes at a time
-- New runs wait in a pending state until the current one finishes
-- `cancel-in-progress: false` means we queue (don't cancel) waiting runs
+### Visualization Exercise
+Draw the dependency graph for this workflow.
 
 ---
 
-## Exercise 3: Enable Auto-Cancellation (10 minutes)
+## Exercise 3: Passing Data Between Jobs (20 minutes)
 
-### Cancel old runs when new commits arrive
+### Scenario
+Your build job creates a version number that needs to be used by both test and deploy jobs.
 
-1. Edit `.github/workflows/concurrency.yml`.
+### Task
+Use job outputs to pass data between jobs.
 
-2. Change `cancel-in-progress: false` to `cancel-in-progress: true`:
+### Steps
+
+1. Create `.github/workflows/job-outputs.yml`
 
 ```yaml
-name: Concurrency Demo
+name: Job Outputs
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  deploy:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build-time: ${{ steps.version.outputs.build-time }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build-time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+      
+      - name: Build with version
+        run: |
+          echo "Building version ${{ steps.version.outputs.version }}"
+          sleep 5
+  
+  test:
+    needs: build
     runs-on: ubuntu-latest
     
     steps:
-      - name: Simulate deployment
+      - name: Test version
         run: |
-          echo "Starting deployment at $(date)"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Concurrency group: ${{ github.workflow }}-${{ github.ref }}"
-          sleep 30
-          echo "Deployment complete at $(date)"
+          echo "Testing version: ${{ needs.build.outputs.version }}"
+          echo "Built at: ${{ needs.build.outputs.build-time }}"
+          sleep 5
+          echo "Tests passed!"
+  
+  deploy:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy version
+        run: |
+          echo "Deploying version: ${{ needs.build.outputs.version }}"
+          echo "Built at: ${{ needs.build.outputs.build-time }}"
+          sleep 5
+          echo "Deployment complete!"
+      
+      - name: Create release tag
+        run: |
+          echo "Would tag release: v${{ needs.build.outputs.version }}"
 ```
 
-3. Commit the changes.
+### Questions to Answer
+1. How do you define outputs in a job?
+2. How do you access outputs from a dependent job?
+3. What types of data can be passed between jobs?
 
-4. Trigger the workflow 3 times quickly using **Run workflow** or by pushing commits.
-
-5. **Watch**: The first run starts. As soon as the second run queues, the first is cancelled. When the third run queues, the second is cancelled. Only the last one completes.
-
-### What just happened?
-
-`cancel-in-progress: true` changes the behavior from "queue and wait" to "cancel and replace":
-- When a new run enters the concurrency group, any currently running workflow in that group is immediately cancelled
-- This is useful for development branches where only the latest code matters
-- Saves CI minutes by not running outdated workflows
-- Use for: feature branches, PR checks, preview deployments
-- Avoid for: production deployments, workflows with side effects
+### Challenge
+Add another output for the commit SHA and use it in the deploy job.
 
 ---
 
-## Exercise 4: Use Branch-Specific Concurrency (10 minutes)
+## Exercise 4: Conditional Dependencies (15 minutes)
 
-### Different behavior for different branches
+### Scenario
+You want to deploy to staging automatically, but deploy to production only on tags or manual approval.
 
-1. Edit `.github/workflows/concurrency.yml`.
+### Task
+Create conditional job execution based on dependencies and context.
 
-2. Update the `on:` section to trigger on both main and develop branches, and adjust the concurrency to be conditional:
+### Steps
+
+1. Create `.github/workflows/conditional-dependencies.yml`
 
 ```yaml
-name: Concurrency Demo
+name: Conditional Dependencies
 
 on:
-  workflow_dispatch:
   push:
     branches: [main, develop]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    tags:
+      - 'v*'
 
 jobs:
-  deploy:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="snapshot-${{ github.run_number }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Build
+        run: echo "Building ${{ steps.version.outputs.version }}"
+  
+  test:
+    needs: build
     runs-on: ubuntu-latest
     
     steps:
-      - name: Simulate deployment
+      - name: Run tests
         run: |
-          echo "Starting deployment at $(date)"
-          echo "Branch: ${{ github.ref }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Cancel enabled: ${{ github.ref != 'refs/heads/main' }}"
-          sleep 30
-          echo "Deployment complete at $(date)"
+          echo "Testing version ${{ needs.build.outputs.version }}"
+          sleep 5
+  
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+      - name: Deploy to staging
+        run: |
+          echo "Deploying ${{ needs.build.outputs.version }} to staging"
+          sleep 5
+  
+  deploy-production:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "Deploying ${{ needs.build.outputs.version }} to production"
+          sleep 5
+          echo "Production deployment complete!"
 ```
 
-3. Commit the changes.
+### Questions to Answer
+1. When does the staging deployment run?
+2. When does the production deployment run?
+3. Can staging and production deploy in parallel?
 
-4. Create a `develop` branch (if it doesn't exist):
-   - Go to **Code** → branch dropdown → type "develop" → **Create branch: develop**
-
-5. Push commits to `develop` multiple times quickly, then push to `main` multiple times quickly.
-
-6. **Watch**: Develop runs cancel each other. Main runs queue and all complete.
-
-### What just happened?
-
-You can use expressions in concurrency settings:
-- `${{ github.ref != 'refs/heads/main' }}` evaluates to `true` for non-main branches and `false` for main
-- Main branch: `cancel-in-progress: false` → runs queue and all complete (safe for production)
-- Develop branch: `cancel-in-progress: true` → older runs cancelled (faster feedback)
-- This pattern lets you protect production while staying fast on feature work
+### Test Scenarios
+1. Push to main branch - which jobs run?
+2. Push to develop branch - which jobs run?
+3. Create a tag v1.0.0 - which jobs run?
 
 ---
 
-## Exercise 5: Add Job-Level Concurrency (10 minutes)
+## Exercise 5: Handling Job Failures (15 minutes)
 
-### Control concurrency for individual jobs
+### Scenario
+You want a notification job that runs whether the pipeline succeeds or fails, and a cleanup job that always runs.
 
-1. Edit `.github/workflows/concurrency.yml`.
+### Task
+Use special conditionals to handle different job outcomes.
 
-2. Add a second job with its own concurrency settings:
+### Steps
+
+1. Create `.github/workflows/failure-handling.yml`
 
 ```yaml
-name: Concurrency Demo
+name: Failure Handling
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main, develop]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    branches: [main]
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Simulate deployment
+      - name: Build
         run: |
-          echo "Starting deployment at $(date)"
-          echo "Branch: ${{ github.ref }}"
-          echo "Run ID: ${{ github.run_id }}"
-          sleep 30
-          echo "Deployment complete at $(date)"
+          echo "Building..."
+          # Uncomment to simulate failure
+          # exit 1
+          sleep 5
+  
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Test
+        run: |
+          echo "Testing..."
+          # Uncomment to simulate failure
+          # exit 1
+          sleep 5
+  
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy
+        run: |
+          echo "Deploying..."
+          sleep 5
+  
+  notify:
+    needs: [build, test, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check results
+        run: |
+          echo "Build: ${{ needs.build.result }}"
+          echo "Test: ${{ needs.test.result }}"
+          echo "Deploy: ${{ needs.deploy.result }}"
+      
+      - name: Notify on success
+        if: needs.deploy.result == 'success'
+        run: echo "✅ Pipeline succeeded!"
+      
+      - name: Notify on failure
+        if: contains(needs.*.result, 'failure')
+        run: echo "❌ Pipeline failed!"
   
   cleanup:
+    needs: [build, test, deploy]
+    if: always()
     runs-on: ubuntu-latest
-    concurrency:
-      group: cleanup-${{ github.ref }}
-      cancel-in-progress: true
     
     steps:
-      - name: Cleanup old artifacts
+      - name: Cleanup resources
         run: |
-          echo "Cleaning up artifacts at $(date)"
-          echo "Branch: ${{ github.ref }}"
-          sleep 20
-          echo "Cleanup complete at $(date)"
+          echo "Cleaning up temporary resources..."
+          echo "Cleanup complete"
 ```
 
-3. Commit the changes.
+### Questions to Answer
+1. What does `if: always()` do?
+2. How can you check if any dependency failed?
+3. What are the possible values of `needs.<job>.result`?
 
-4. Trigger multiple runs quickly.
+### Test It
+1. Run with all jobs succeeding
+2. Uncomment the `exit 1` in test job and observe
+3. Check what the notify job reports
 
-5. **Watch**: Both jobs run in parallel within each workflow run. But the cleanup job has its own concurrency group, so if you trigger runs quickly, cleanup jobs can cancel independently from deploy jobs.
-
-### What just happened?
-
-Job-level concurrency works alongside workflow-level concurrency:
-- Workflow-level concurrency controls entire workflow runs
-- Job-level concurrency adds an additional layer of control per job
-- Each job can have its own concurrency settings (group and cancel-in-progress)
-- Useful when different jobs have different cancellation requirements
-- Example: allow test jobs to cancel but not deployment jobs
+### Possible Result Values
+- `success` - Job completed successfully
+- `failure` - Job failed
+- `cancelled` - Job was cancelled
+- `skipped` - Job was skipped
 
 ---
 
-## Exercise 6: Use Dynamic Concurrency Groups (10 minutes)
+## Exercise 6: Complex Dependency Graph (20 minutes)
 
-### One concurrency group per pull request
+### Scenario
+Build a realistic CI/CD pipeline with:
+- Parallel linting and unit tests
+- Integration tests that need both
+- Separate staging and production deployments
+- Security scanning in parallel with tests
+- Final verification after deployment
 
-1. Edit `.github/workflows/concurrency.yml`.
+### Task
+Create a complex workflow with multiple dependency paths.
 
-2. Add `pull_request` to the triggers and update the concurrency group to handle both pushes and PRs:
+### Steps
+
+1. Create `.github/workflows/complex-dependencies.yml`
 
 ```yaml
-name: Concurrency Demo
+name: Complex Dependencies
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main, develop]
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    branches: [main]
 
 jobs:
-  deploy:
+  lint:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Simulate deployment
+      - uses: actions/checkout@v4
+      - name: Lint code
         run: |
-          echo "Starting deployment at $(date)"
-          echo "Branch: ${{ github.ref }}"
-          echo "PR: ${{ github.event.pull_request.number || 'N/A' }}"
-          echo "Run ID: ${{ github.run_id }}"
-          sleep 30
-          echo "Deployment complete at $(date)"
+          echo "Linting code..."
+          sleep 5
+          echo "Linting complete"
   
-  cleanup:
+  unit-test:
     runs-on: ubuntu-latest
-    concurrency:
-      group: cleanup-${{ github.ref }}
-      cancel-in-progress: true
     
     steps:
-      - name: Cleanup old artifacts
+      - uses: actions/checkout@v4
+      - name: Unit tests
         run: |
-          echo "Cleaning up artifacts at $(date)"
-          sleep 20
-          echo "Cleanup complete at $(date)"
+          echo "Running unit tests..."
+          sleep 10
+          echo "Unit tests passed"
+  
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      - name: Security scan
+        run: |
+          echo "Running security scan..."
+          sleep 8
+          echo "No vulnerabilities found"
+  
+  build:
+    needs: [lint, unit-test]
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-id: ${{ steps.build.outputs.artifact-id }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build application
+        id: build
+        run: |
+          ARTIFACT_ID="build-${{ github.run_number }}"
+          echo "artifact-id=$ARTIFACT_ID" >> $GITHUB_OUTPUT
+          echo "Building $ARTIFACT_ID..."
+          sleep 10
+          echo "Build complete"
+  
+  integration-test:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Integration tests
+        run: |
+          echo "Running integration tests for ${{ needs.build.outputs.artifact-id }}"
+          sleep 15
+          echo "Integration tests passed"
+  
+  deploy-staging:
+    needs: [build, integration-test, security-scan]
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+      - name: Deploy to staging
+        run: |
+          echo "Deploying ${{ needs.build.outputs.artifact-id }} to staging"
+          sleep 10
+          echo "Staging deployment complete"
+  
+  smoke-test-staging:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Smoke tests on staging
+        run: |
+          echo "Running smoke tests on staging..."
+          sleep 5
+          echo "Smoke tests passed"
+  
+  deploy-production:
+    needs: smoke-test-staging
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production..."
+          sleep 10
+          echo "Production deployment complete"
+  
+  smoke-test-production:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Smoke tests on production
+        run: |
+          echo "Running smoke tests on production..."
+          sleep 5
+          echo "Smoke tests passed"
+  
+  notify-success:
+    needs: smoke-test-production
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send success notification
+        run: echo "🎉 Deployment successful!"
 ```
 
-3. Commit the changes.
+### Questions to Answer
+1. Which jobs can run in parallel?
+2. What's the critical path (longest dependency chain)?
+3. How would you add a manual approval before production?
 
-4. Create a pull request, then push multiple commits to that PR branch.
-
-5. **Watch**: Each PR gets its own concurrency group (pr-123, pr-124, etc.). Commits to the same PR cancel previous runs. Different PRs don't interfere with each other.
-
-### What just happened?
-
-The expression `${{ github.event.pull_request.number || github.ref }}` creates flexible concurrency groups:
-- For pull requests: uses PR number (pr-42, pr-43, etc.)
-- For pushes: uses branch ref (main, develop, etc.)
-- `||` is the "or" operator: use PR number if available, otherwise use ref
-- Each PR has isolated concurrency—multiple PRs can run simultaneously
-- New commits to the same PR cancel old checks
+### Deliverables
+1. Draw the complete dependency graph
+2. Calculate minimum workflow duration (assuming times as given)
+3. Identify optimization opportunities
 
 ---
 
-## What You've Learned
+## Exercise 7: Reusable Job Dependencies (15 minutes)
 
-### Concurrency Fundamentals
+### Scenario
+Create a reusable workflow pattern where calling workflows can depend on the reusable workflow's completion.
 
-**Concurrency Groups**: A unique identifier that groups related workflow runs. Only one run per group executes at a time (or cancels previous runs based on settings).
+### Task
+Create a reusable workflow and call it with dependencies.
 
-**cancel-in-progress Setting**:
-- `false`: New runs wait in queue until current run completes (safe for production, deployments with side effects)
-- `true`: New runs cancel currently running workflows in the same group (fast feedback for development, saves CI minutes)
+### Steps
 
-### Strategic Patterns
+1. Create `.github/workflows/reusable-build.yml`
 
-**Workflow-Level Concurrency**: Applied at the top level, controls entire workflow runs across all jobs.
-
-**Job-Level Concurrency**: Applied to individual jobs, adds granular control independent of workflow-level settings.
-
-**Dynamic Groups**: Use expressions like `${{ github.event.pull_request.number || github.ref }}` to create context-aware concurrency groups.
-
-**Branch-Specific Behavior**: Use conditional expressions `${{ github.ref != 'refs/heads/main' }}` to apply different strategies to different branches.
-
-### Real-World Applications
-
-**Development/Feature Branches**: 
 ```yaml
-cancel-in-progress: true
-```
-Cancels old runs when new commits arrive. Developers get faster feedback on latest code.
+name: Reusable Build
 
-**Pull Requests**: 
+on:
+  workflow_call:
+    outputs:
+      build-version:
+        description: "The build version"
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Generate version
+        id: version
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version $VERSION"
+      
+      - name: Build
+        run: |
+          echo "Build complete"
+          sleep 5
+```
+
+2. Create `.github/workflows/caller-workflow.yml`
+
 ```yaml
-group: pr-${{ github.event.pull_request.number }}
-```
-Each PR gets its own concurrency group. Multiple PRs run in parallel, but commits to the same PR cancel previous checks.
+name: Caller Workflow
 
-**Production Deployments**: 
-```yaml
-cancel-in-progress: false
-```
-Runs queue and all complete. Never cancel deployments that might leave systems in inconsistent states.
+on:
+  push:
+    branches: [main]
 
-**Mixed Strategies**: Combine workflow-level and job-level concurrency for complex scenarios—tests can cancel, deployments queue.
-- Concurrency groups identify which runs should be managed together
-- `cancel-in-progress: true` for dev/PR workflows saves time and resources
-- `cancel-in-progress: false` for production ensures deployments complete
-- Job-level concurrency provides fine-grained control
-- Use `${{ github.ref }}` for branch-specific concurrency
-- Use PR numbers for PR-specific concurrency
+jobs:
+  call-build:
+    uses: ./.github/workflows/reusable-build.yml
+  
+  test:
+    needs: call-build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Test with version
+        run: |
+          echo "Testing version: ${{ needs.call-build.outputs.build-version }}"
+          sleep 5
+  
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy
+        run: |
+          echo "Deploying version: ${{ needs.call-build.outputs.build-version }}"
+          sleep 5
+```
+
+### Questions to Answer
+1. How do reusable workflows integrate with job dependencies?
+2. How do you access outputs from reusable workflows?
+3. What are the benefits of this pattern?
+
+---
+
+## Best Practices Summary
+
+### ✅ DO
+- Use clear, descriptive job names
+- Chain jobs only when truly dependent
+- Pass data through outputs, not artifacts (for small data)
+- Use `if: always()` for cleanup and notification jobs
+- Document complex dependency graphs
+- Keep dependency chains as flat as possible
+
+### ❌ DON'T
+- Create unnecessary dependencies (slows pipeline)
+- Make all jobs depend on one another (no parallelism)
+- Forget to handle failure cases
+- Create circular dependencies (impossible)
+- Over-complicate with too many dependency levels
+
+---
+
+## Verification Checklist
+
+- [ ] Jobs execute in correct order
+- [ ] Parallel jobs run simultaneously when possible
+- [ ] Outputs pass correctly between jobs
+- [ ] Failed dependencies prevent downstream jobs
+- [ ] Conditional dependencies work as expected
+- [ ] Cleanup jobs run regardless of success/failure
+
+---
+
+## Troubleshooting Guide
+
+**Problem:** Job doesn't wait for dependency  
+**Solution:** Verify `needs:` is properly configured
+
+**Problem:** Can't access output from previous job  
+**Solution:** Check output is defined in job outputs section
+
+**Problem:** Jobs running when they shouldn't  
+**Solution:** Verify conditionals and use `needs.<job>.result` checks
+
+**Problem:** Pipeline too slow  
+**Solution:** Review dependencies and parallelize independent jobs
+
+---
+
+## Key Takeaways
+
+- `needs:` creates job dependencies and execution order
+- Jobs without dependencies run in parallel
+- Use job outputs to pass data between jobs
+- `if: always()` ensures jobs run regardless of failures
+- Multiple dependencies with `needs: [job1, job2]` creates AND logic
+- Job results can be checked with `needs.<job>.result`
+- Complex pipelines need careful design to balance speed and safety
 
 ---
 
 ## Resources
 
-- [GitHub Actions Concurrency Documentation](https://docs.github.com/en/actions/using-jobs/using-concurrency)
-- [Workflow syntax for concurrency](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency)
+- [Using jobs in GitHub Actions](https://docs.github.com/en/actions/using-jobs)
+- [Defining outputs for jobs](https://docs.github.com/en/actions/using-jobs/defining-outputs-for-jobs)
+- [Job status check functions](https://docs.github.com/en/actions/learn-github-actions/expressions#status-check-functions)
 
 ---
 
-**End of Lab 2**
+**End of Lab 3**
